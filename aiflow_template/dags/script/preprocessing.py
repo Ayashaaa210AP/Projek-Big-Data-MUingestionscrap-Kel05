@@ -69,7 +69,7 @@ def process_data():
         cur_dw = conn_dw.cursor()
         
         # 1. Ambil data dari Bronze
-        cur_bronze.execute("SELECT article_id, title, source_name, publish_date, content_body FROM articles")
+        cur_bronze.execute("SELECT article_id, title, author, source_name, publish_date, content_body FROM articles")
         articles = cur_bronze.fetchall()
         print(f"[*] Memproses {len(articles)} artikel...")
 
@@ -105,8 +105,8 @@ def process_data():
                 article_sk = existing_art[0] # <-- Pastikan ini [0], bukan ['article_sk']
             else:
                 cur_dw.execute(
-                    "INSERT INTO dim_article (article_id, title, url) VALUES (%s, %s, %s) RETURNING article_sk",
-                    (art['article_id'], art['title'], f"https://antaranews.com/berita/{art['article_id']}")
+                    "INSERT INTO dim_article (article_id, title, author, url) VALUES (%s, %s, %s, %s) RETURNING article_sk",
+                    (art['article_id'], art['title'], art['author'], f"https://antaranews.com/berita/{art['article_id']}")
                 )
                 article_sk = cur_dw.fetchone()[0]
                 

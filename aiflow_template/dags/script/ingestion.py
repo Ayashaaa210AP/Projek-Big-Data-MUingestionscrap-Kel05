@@ -65,8 +65,8 @@ def insert_staging(data: dict) -> bool:
         cursor.execute(
             """
             INSERT INTO articles
-                (article_id, title, publish_date, source_name, content_body)
-            VALUES (%s, %s, %s, %s, %s)
+                (article_id, title, publish_date, source_name, content_body, author)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (
                 article_id,
@@ -74,6 +74,7 @@ def insert_staging(data: dict) -> bool:
                 publish_date,
                 data.get("source_name", "ANTARA News"),
                 data.get("content"),
+                data.get("author"),
             ),
         )
         conn.commit()
