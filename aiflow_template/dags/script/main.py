@@ -135,6 +135,16 @@ def get_page(url):
 
     content_preview = " ".join(paragraphs) if paragraphs else "Konten tidak terbaca"
 
+    # ==========================================
+    # FILTER KEYWORD 
+    # ==========================================
+    MU_KEYWORDS = ["manchester united", "mufc", "red devils", "old trafford", "setan merah"]
+    combined_text = (title + " " + content_preview).lower()
+    
+    # Jika tidak ada satu pun keyword yang cocok, return None (berita akan di-skip)
+    if not any(keyword in combined_text for keyword in MU_KEYWORDS):
+        print(f"   [-] Skip, bukan berita MU: {title[:50]}...")
+        return None
     return {
         "url": url,
         "title": title,
