@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import json
 import time
+import re
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 import requests
@@ -16,6 +17,9 @@ from ingestion import insert_staging, select_staging
 BASE_URL = "https://www.antaranews.com/sepakbola/liga-inggris-premier"
 SOURCE_NAME = "ANTARA News"
 
+# BERAPA HALAMAN YANG MAU DI-SCRAPE? (Ubah ke 5 atau 10 untuk data lebih banyak)
+MAX_PAGE = 100 
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -23,7 +27,6 @@ HEADERS = {
         "Chrome/124.0.0.0 Safari/537.36"
     )
 }
-
 
 def request_url(url):
     """Ambil HTML → BeautifulSoup, atau None jika gagal."""
@@ -35,35 +38,46 @@ def request_url(url):
         print(f"  [!] Gagal request ke {url}: {e}")
         return None
 
-
 def get_index():
-    """Ambil daftar URL artikel Liga Inggris dari halaman indeks."""
+    """Ambil daftar URL artikel Liga Inggris dari beberapa halaman indeks."""
     print(f"[*] Mengakses halaman indeks: {BASE_URL}")
-    soup = request_url(BASE_URL)
-    if not soup:
-        return []
-
-    for garbage in soup.select(".pagination, nav, footer, .footer, aside, .sidebar"):
-        garbage.decompose()
-
     links = []
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        title_text = a.get_text(strip=True)
+    
+    # LOOPING HALAMAN (PAGINASI)
+    for page in range(1, MAX_PAGE + 1):
+        if page == 1:
+            page_url = BASE_URL
+        else:
+            page_url = f"{BASE_URL}/{page}"
+            
+        print(f"  [*] Scraping Halaman Indeks ke-{page}: {page_url}")
+        soup = request_url(page_url)
+        
+        if not soup:
+            print(f"  [!] Gagal membuka halaman {page}, lanjut ke halaman berikutnya.")
+            continue
 
-        if "/berita/" in href:
-            full_url = urljoin(BASE_URL, href)
-            if len(title_text) > 20 and full_url not in links:
-                if any(
-                    x in title_text.lower()
-                    for x in ["infografik", "foto", "video", "baca juga"]
-                ):
-                    continue
-                links.append(full_url)
+        # Hapus elemen pengganggu
+        for garbage in soup.select(".pagination, nav, footer, .footer, aside, .sidebar"):
+            garbage.decompose()
 
-    print(f"  [+] Ditemukan {len(links)} artikel murni Liga Inggris.")
+        # Ekstrak link
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            title_text = a.get_text(strip=True)
+
+            if "/berita/" in href:
+                full_url = urljoin(BASE_URL, href)
+                if len(title_text) > 20 and full_url not in links:
+                    if any(x in title_text.lower() for x in ["infografik", "foto", "video", "baca juga"]):
+                        continue
+                    links.append(full_url)
+        
+        # Jeda antar halaman agar tidak diblokir server ANTARA
+        time.sleep(2)
+
+    print(f"  [+] Total keseluruhan ditemukan {len(links)} artikel dari {MAX_PAGE} halaman.")
     return links
-
 
 def get_page(url):
     """Ekstrak detail satu artikel. Return dict atau None."""
@@ -91,9 +105,7 @@ def get_page(url):
     if meta_date and meta_date.get("content"):
         publish_date = meta_date["content"]
     else:
-        date_elem = soup.select_one("span.article-date") or soup.select_one(
-            "span.text-secondary"
-        )
+        date_elem = soup.select_one("span.article-date") or soup.select_one("span.text-secondary")
         if date_elem:
             publish_date = date_elem.get_text(strip=True)
 
@@ -136,15 +148,18 @@ def get_page(url):
     content_preview = " ".join(paragraphs) if paragraphs else "Konten tidak terbaca"
 
     # ==========================================
-    # FILTER KEYWORD 
+    # FILTER KEYWORD MENGGUNAKAN REGEX (Lebih Akurat)
     # ==========================================
-    MU_KEYWORDS = ["manchester united", "mufc", "red devils", "old trafford", "setan merah"]
     combined_text = (title + " " + content_preview).lower()
     
-    # Jika tidak ada satu pun keyword yang cocok, return None (berita akan di-skip)
-    if not any(keyword in combined_text for keyword in MU_KEYWORDS):
+    # Pola regex: Mencari kata-kata ini sebagai kata utuh.
+    # \b memastikan 'mu' tidak mendeteksi 'muka' atau 'komunikasi'
+    mu_pattern = r'\b(manchester united|mufc|red devils|old trafford|setan merah|mu)\b'
+    
+    if not re.search(mu_pattern, combined_text, re.IGNORECASE):
         print(f"   [-] Skip, bukan berita MU: {title[:50]}...")
         return None
+        
     return {
         "url": url,
         "title": title,
@@ -152,9 +167,8 @@ def get_page(url):
         "publish_date": publish_date,
         "author": author,
         "content": content_preview,
-        "source_name": SOURCE_NAME,   # ← ditambahkan agar ingestion tidak pakai default
+        "source_name": SOURCE_NAME,
     }
-
 
 def main():
     """Alur DAG 1: scrape → filter → insert staging → simpan JSON (debug)."""
@@ -175,13 +189,11 @@ def main():
         page_data = get_page(url)
 
         if not page_data:
-            print("   ✗ Gagal ekstrak.")
+            print("   ✗ Gagal ekstrak / Bukan MU.")
             continue
 
-        # Filter konten kosong → jangan masuk DB (ganggu VADER)
         if page_data["content"] == "Konten tidak terbaca":
             print("   ✗ Konten kosong, skip insert.")
-            articles.append(page_data)  # tetap simpan ke JSON untuk audit
             continue
 
         articles.append(page_data)
@@ -191,7 +203,6 @@ def main():
 
         print(f"   ✓ Judul : {page_data['title'][:60]}")
         print(f"   ✓ Tanggal: {page_data['publish_date']}")
-        print(f"   ✓ Konten : {len(page_data['content'])} karakter")
         print("-" * 50)
         time.sleep(1)
 
@@ -202,11 +213,8 @@ def main():
         json.dump(articles, f, indent=4, ensure_ascii=False)
 
     print(f"\n[+] Selesai. Inserted: {inserted}, Skipped/Duplikat: {skipped}")
-    print(f"[+] JSON debug: {output_path}")
-
     print("\n=== 5 Baris Terakhir di Staging ===")
     select_staging(limit=5)
-
 
 if __name__ == "__main__":
     main()

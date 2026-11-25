@@ -1,0 +1,8 @@
+# Gunakan base image Airflow yang sama
+FROM apache/airflow:3.3.2
+
+# Instal PyTorch versi CPU-only (jauh lebih kecil, tanpa CUDA)
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Instal library lainnya
+RUN pip install --no-cache-dir "transformers<5.0.0" Sastrawi
